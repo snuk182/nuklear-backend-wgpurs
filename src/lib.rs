@@ -1,8 +1,95 @@
 #![cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))] // TODO later
 
 use nuklear::{Buffer as NkBuffer, Context, ConvertConfig, DrawVertexLayoutAttribute, DrawVertexLayoutElements, DrawVertexLayoutFormat, Handle, Vec2};
+use std::{mem::size_of, slice::from_raw_parts};
 use wgpu::*;
-use std::mem::size_of;
+
+const TEXTURE_FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
+
+#[allow(dead_code)]
+struct Vertex {
+    pos: [f32; 2], // "Position",
+    tex: [f32; 2], // "TexCoord",
+    col: [u8; 4],  // "Color",
+}
+#[allow(dead_code)]
+struct WgpuTexture {
+    texture: Texture,
+    sampler: Sampler,
+    
+    pub bind_group: BindGroup,
+}
+
+impl WgpuTexture {
+    pub fn new(device: &mut Device, drawer: &Drawer, image: &[u8], width: u32, height: u32) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            size: Extent3d { width: width, height: height, depth: 1 },
+            array_size: 1,
+            dimension: TextureDimension::D2,
+            format: TEXTURE_FORMAT,
+            usage: TextureUsageFlags::SAMPLED | TextureUsageFlags::TRANSFER_DST,
+        });
+        let sampler = device.create_sampler(&SamplerDescriptor {
+            r_address_mode: AddressMode::ClampToEdge,
+            s_address_mode: AddressMode::ClampToEdge,
+            t_address_mode: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            mipmap_filter: FilterMode::Linear,
+            lod_min_clamp: -100.0,
+            lod_max_clamp: 100.0,
+            max_anisotropy: 0,
+            compare_function: CompareFunction::Always,
+            border_color: BorderColor::TransparentBlack,
+        });
+
+        let bytes = image.len() as u32;
+        let buffer = device.create_buffer(&BufferDescriptor {
+            size: bytes,
+            usage: BufferUsageFlags::TRANSFER_SRC,
+        });
+        buffer.set_sub_data(0, image);
+
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { todo: 0 });
+
+        let pixel_size = bytes / width / height;
+        encoder.copy_buffer_to_texture(
+            BufferCopyView {
+                buffer: &buffer,
+                offset: 0,
+                row_pitch: pixel_size * width,
+                image_height: height,
+            },
+            TextureCopyView {
+                texture: &texture,
+                level: 0,
+                slice: 0,
+                origin: Origin3d { x: 0.0, y: 0.0, z: 0.0 },
+            },
+            Extent3d { width, height, depth: 1 },
+        );
+
+        device.get_queue().submit(&[encoder.finish()]);
+
+        WgpuTexture {
+            bind_group: device.create_bind_group(&BindGroupDescriptor {
+                layout: &drawer.tla,
+                bindings: &[
+                    wgpu::Binding {
+                        binding: 0,
+                        resource: BindingResource::TextureView(&texture.create_default_view()),
+                    },
+                    wgpu::Binding {
+                        binding: 1,
+                        resource: BindingResource::Sampler(&sampler),
+                    },
+                ],
+            }),
+            sampler,
+            texture,
+        }
+    }
+}
 
 /*gfx_defines!{
     vertex Vertex {
@@ -33,11 +120,12 @@ impl Default for Vertex {
 pub struct Drawer {
     cmd: NkBuffer,
     pso: RenderPipeline,
-    smp: Sampler,
-    tex: Vec<Texture>,
-    vbf: Buffer,
-    ebf: Buffer,
-    lbf: Buffer,
+    tla: BindGroupLayout,
+    tex: Vec<WgpuTexture>,
+    //vbf: Buffer,
+    //ebf: Buffer,
+    ubf: Buffer,
+    ubg: BindGroup,
     vsz: usize,
     esz: usize,
     vle: DrawVertexLayoutElements,
@@ -46,28 +134,34 @@ pub struct Drawer {
 }
 
 impl Drawer {
-    pub fn new<F>(device: &mut Device, col: Color, texture_count: usize, vbo_size: usize, ebo_size: usize, command_buffer: NkBuffer) -> Drawer {
+    pub fn new(device: &mut Device, col: Color, texture_count: usize, vbo_size: usize, ebo_size: usize, command_buffer: NkBuffer) -> Drawer {
         let vs: &[u8] = include_bytes!("../shaders/vs.fx");
         let fs: &[u8] = include_bytes!("../shaders/ps.fx");
 
         let vs = device.create_shader_module(vs);
         let fs = device.create_shader_module(fs);
 
+        let ubf = device.create_buffer(&BufferDescriptor {
+            size: size_of::<f32>() as u32 * 16,
+            usage: BufferUsageFlags::UNIFORM | BufferUsageFlags::TRANSFER_DST,
+        });
+
         Drawer {
             cmd: command_buffer,
             col: Some(col),
-            smp: device.create_sampler(&SamplerDescriptor {
-                r_address_mode: AddressMode::ClampToEdge,
-                s_address_mode: AddressMode::ClampToEdge,
-                t_address_mode: AddressMode::ClampToEdge,
-                mag_filter: FilterMode::Linear,
-                min_filter: FilterMode::Linear,
-                mipmap_filter: FilterMode::Linear,
-                lod_min_clamp: -100.0,
-                lod_max_clamp: 100.0,
-                max_anisotropy: 0,
-                compare_function: CompareFunction::Always,
-                border_color: BorderColor::TransparentBlack,
+            tla: device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                bindings: &[
+                    BindGroupLayoutBinding {
+                        binding: 0,
+                        visibility: ShaderStageFlags::FRAGMENT,
+                        ty: BindingType::SampledTexture,
+                    },
+                    BindGroupLayoutBinding {
+                        binding: 1,
+                        visibility: ShaderStageFlags::FRAGMENT,
+                        ty: BindingType::Sampler,
+                    },
+                ],
             }),
             pso: device.create_render_pipeline(&RenderPipelineDescriptor {
                 layout: &device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -106,7 +200,7 @@ impl Drawer {
                 },
                 primitive_topology: PrimitiveTopology::TriangleList,
                 color_states: &[ColorStateDescriptor {
-                    format: TextureFormat::Rgba8UnormSrgb,
+                    format: TEXTURE_FORMAT,
                     color: BlendDescriptor {
                         src_factor: BlendFactor::SrcAlpha,
                         dst_factor: BlendFactor::OneMinusSrcAlpha,
@@ -122,7 +216,7 @@ impl Drawer {
                 depth_stencil_state: None,
                 index_format: IndexFormat::Uint16,
                 vertex_buffers: &[VertexBufferDescriptor {
-                    stride: (size_of::<f32>() * 4 + size_of::<u8>() * 4) as u32,
+                    stride: (size_of::<Vertex>()) as u32,
                     step_mode: InputStepMode::Vertex,
                     attributes: &[
                         wgpu::VertexAttributeDescriptor {
@@ -145,20 +239,25 @@ impl Drawer {
                 sample_count: 1,
             }),
             tex: Vec::with_capacity(texture_count + 1),
-            vbf: device.create_buffer(&BufferDescriptor {
-			      size: vbo_size as u32,
-			      usage: BufferUsageFlags::VERTEX | BufferUsageFlags::TRANSFER_DST,
-			}),
-            ebf: device.create_buffer(&BufferDescriptor {
-			      size: ebo_size as u32,
-			      usage: BufferUsageFlags::INDEX | BufferUsageFlags::TRANSFER_DST,
-			}),
             vsz: vbo_size,
             esz: ebo_size,
-            lbf: device.create_buffer(&BufferDescriptor {
-			      size: size_of::<f32>() as u32 * 16, 
-			      usage: BufferUsageFlags::UNIFORM | BufferUsageFlags::TRANSFER_DST,
-			}),
+            ubg: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                    bindings: &[BindGroupLayoutBinding {
+                        binding: 0,
+                        visibility: ShaderStageFlags::VERTEX,
+                        ty: BindingType::UniformBuffer,
+                    }],
+                }),
+                bindings: &[Binding {
+                    binding: 0,
+                    resource: BindingResource::Buffer {
+                        buffer: &ubf,
+                        range: 0..(size_of::<f32>() as u32 * 16),
+                    },
+                }],
+            }),
+            ubf: ubf,
             vle: DrawVertexLayoutElements::new(&[
                 (DrawVertexLayoutAttribute::NK_VERTEX_POSITION, DrawVertexLayoutFormat::NK_FORMAT_FLOAT, 0),
                 (DrawVertexLayoutAttribute::NK_VERTEX_TEXCOORD, DrawVertexLayoutFormat::NK_FORMAT_FLOAT, size_of::<f32>() as u32 * 2),
@@ -169,94 +268,107 @@ impl Drawer {
     }
 
     pub fn add_texture(&mut self, device: &mut Device, image: &[u8], width: u32, height: u32) -> Handle {
-        let (_, view) = factory.create_texture_immutable_u8::<ColorFormat>(Kind::D2(width as u16, height as u16, AaMode::Single), Mipmap::Provided, &[image]).unwrap();
+        //let (_, view) = factory.create_texture_immutable_u8::<ColorFormat>(Kind::D2(width as u16, height as u16, AaMode::Single), Mipmap::Provided, &[image]).unwrap();
 
-        self.tex.push(view);
-
+        self.tex.push(WgpuTexture::new(device, self, image, width, height));
         Handle::from_id(self.tex.len() as i32)
     }
 
-    pub fn draw(&mut self, ctx: &mut Context, cfg: &mut ConvertConfig, encoder: &mut Encoder, device: &mut Device, width: u32, height: u32, scale: Vec2) {
-        use gfx::IntoIndexBuffer;
-
-        if self.col.clone().is_none() {
+    pub fn draw(&mut self, ctx: &mut Context, cfg: &mut ConvertConfig, encoder: &mut CommandEncoder, view: &TextureView, device: &mut Device, width: u32, height: u32, scale: Vec2) {
+        /*if self.col.clone().is_none() {
             return;
-        }
-
+        }*/
         let ortho = [
             [2.0f32 / width as f32, 0.0f32, 0.0f32, 0.0f32],
             [0.0f32, -2.0f32 / height as f32, 0.0f32, 0.0f32],
             [0.0f32, 0.0f32, -1.0f32, 0.0f32],
             [-1.0f32, 1.0f32, 0.0f32, 1.0f32],
         ];
+        let mut rpass = encoder.begin_render_pass(&RenderPassDescriptor {
+            color_attachments: &[RenderPassColorAttachmentDescriptor {
+                attachment: &view,
+                load_op: match self.col {
+                    Some(_) => wgpu::LoadOp::Clear,
+                    _ => wgpu::LoadOp::Load,
+                },
+                store_op: StoreOp::Store,
+                clear_color: self.col.unwrap_or(Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }),
+            }],
+            depth_stencil_attachment: None,
+        });
+        rpass.set_pipeline(&self.pso);
 
         cfg.set_vertex_layout(&self.vle);
-        cfg.set_vertex_size(::std::mem::size_of::<Vertex>());
+        cfg.set_vertex_size(size_of::<Vertex>());
 
+        let mut vbf = device.create_buffer_mapped(self.vsz, BufferUsageFlags::VERTEX | BufferUsageFlags::TRANSFER_DST);
+        let mut ebf = device.create_buffer_mapped(self.esz, BufferUsageFlags::INDEX | BufferUsageFlags::TRANSFER_DST);
         {
-            let mut rwv = factory.write_mapping(&self.vbf).unwrap();
-            let mut rvbuf = unsafe { ::std::slice::from_raw_parts_mut(&mut *rwv as *mut [Vertex] as *mut u8, ::std::mem::size_of::<Vertex>() * self.vsz) };
-            let mut vbuf = NkBuffer::with_fixed(&mut rvbuf);
-
-            let mut rwe = factory.write_mapping(&self.ebf).unwrap();
-            let mut rebuf = unsafe { ::std::slice::from_raw_parts_mut(&mut *rwe as *mut [u16] as *mut u8, ::std::mem::size_of::<u16>() * self.esz) };
-            let mut ebuf = NkBuffer::with_fixed(&mut rebuf);
+            let mut vbuf = NkBuffer::with_fixed(&mut vbf.data);
+            let mut ebuf = NkBuffer::with_fixed(&mut ebf.data);
 
             ctx.convert(&mut self.cmd, &mut vbuf, &mut ebuf, cfg);
         }
+        let vbf = vbf.finish();
+        let ebf = ebf.finish();
 
-        let mut slice = ::gfx::Slice {
+        rpass.set_vertex_buffers(&[(&vbf, 0)]);
+        rpass.set_index_buffer(&ebf, 0);
+
+        /*let mut slice = ::gfx::Slice {
             start: 0,
             end: 0,
             base_vertex: 0,
             instances: None,
             buffer: self.ebf.clone().into_index_buffer(factory),
-        };
+        };*/
+        self.ubf.set_sub_data(0, as_typed_slice(&ortho));
+        rpass.set_bind_group(0, &self.ubg);
+        //encoder.update_constant_buffer(&self.lbf, &Locals { proj: ortho });
 
-        encoder.update_constant_buffer(&self.lbf, &Locals { proj: ortho });
+        let mut start = 0;
+        let mut end = 0;
 
         for cmd in ctx.draw_command_iterator(&self.cmd) {
             if cmd.elem_count() < 1 {
                 continue;
             }
 
-            slice.end = slice.start + cmd.elem_count();
-
-            let id = cmd.texture().id().unwrap();
+            end = start + cmd.elem_count();
 
             let x = cmd.clip_rect().x * scale.x;
             let y = cmd.clip_rect().y * scale.y;
             let w = cmd.clip_rect().w * scale.x;
             let h = cmd.clip_rect().h * scale.y;
 
-            let sc_rect = gfx::Rect {
-                x: (if x < 0f32 { 0f32 } else { x }) as u16,
-                y: (if y < 0f32 { 0f32 } else { y }) as u16,
-                w: (if x < 0f32 { w + x } else { w }) as u16,
-                h: (if y < 0f32 { h + y } else { h }) as u16,
-            };
-
+            let id = cmd.texture().id().unwrap();
             let res = self.find_res(id).unwrap();
 
-            let data = pipe::Data {
-                vbuf: self.vbf.clone(),
-                tex: (res, self.smp.clone()),
-                output: self.col.clone().unwrap(),
-                scissors: sc_rect,
-                locals: self.lbf.clone(),
-            };
+            rpass.set_bind_group(1, &res.bind_group);
 
-            encoder.draw(&slice, &self.pso, &data);
+            end = start + cmd.elem_count();
+            let scissor = (
+                (if x < 0f32 { 0f32 } else { x }) as u16,
+                (if y < 0f32 { 0f32 } else { y }) as u16,
+                (if x < 0f32 { w + x } else { w }) as u16,
+                (if y < 0f32 { h + y } else { h }) as u16,
+            );
 
-            slice.start = slice.end;
+            rpass.draw_indexed(start..end, 0 as i32, 0..1);
+
+            start = end;
         }
     }
 
-    fn find_res(&self, id: i32) -> Option<ShaderResourceView<R, [f32; 4]>> {
+    fn find_res(&self, id: i32) -> Option<&WgpuTexture> {
         if id > 0 && id as usize <= self.tex.len() {
-            Some(self.tex[(id - 1) as usize].clone())
+            self.tex.get((id - 1) as usize)
         } else {
             None
         }
     }
+}
+
+fn as_typed_slice<T>(data: &[T]) -> &[u8] {
+    unsafe { from_raw_parts(data.as_ptr() as *const u8, data.len() * size_of::<T>()) }
 }
