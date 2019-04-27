@@ -1,8 +1,8 @@
-#version 150
+#version 450
 precision mediump float;
 
 layout(set = 1, binding = 0) uniform texture2D Texture;
-layout(set = 1, binding = 0) uniform sampler Sampler;
+layout(set = 1, binding = 1) uniform sampler Sampler;
 
 layout(location = 0) in vec2 Frag_UV;
 layout(location = 1) in vec4 Frag_Color;

@@ -16,5 +16,13 @@ path = "src/lib.rs"
 
 [dependencies]
 log = "~0.3"
-wgpu = "~0.2"
+wgpu = {version = "~0.2", path = "../wgpu/wgpu-rs"}
 nuklear-rust = "~0.5"
+glsl-to-spirv = "~0.1"
+
+[features]
+default = []
+metal = ["wgpu/metal"]
+dx11 = ["wgpu/dx11"]
+dx12 = ["wgpu/dx12"]
+vulkan = ["wgpu/vulkan"]
