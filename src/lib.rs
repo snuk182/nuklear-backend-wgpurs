@@ -94,39 +94,11 @@ impl WgpuTexture {
     }
 }
 
-/*gfx_defines!{
-    vertex Vertex {
-        pos: [f32; 2] = "Position",
-        tex: [f32; 2] = "TexCoord",
-        col: [U8Norm; 4] = "Color",
-    }
-
-    constant Locals {
-        proj: [[f32; 4]; 4] = "ProjMtx",
-    }
-
-    pipeline pipe {
-        vbuf: gfx::VertexBuffer<Vertex> = (),
-        tex: gfx::TextureSampler<[f32; 4]> = "Texture",
-        output: gfx::BlendTarget<super::ColorFormat> = ("Target0", gfx::state::ColorMask::all(), gfx::preset::blend::ALPHA),
-        locals: gfx::ConstantBuffer<Locals> = "Locals",
-        scissors: gfx::Scissor = (),
-    }
-}
-
-impl Default for Vertex {
-    fn default() -> Self {
-        unsafe { ::std::mem::zeroed() }
-    }
-}
-*/
 pub struct Drawer {
     cmd: NkBuffer,
     pso: RenderPipeline,
     tla: BindGroupLayout,
     tex: Vec<WgpuTexture>,
-    //vbf: Buffer,
-    //ebf: Buffer,
     ubf: Buffer,
     ubg: BindGroup,
     vsz: usize,
@@ -148,49 +120,37 @@ impl Drawer {
             size: size_of::<Ortho>() as u32,
             usage: BufferUsageFlags::UNIFORM | BufferUsageFlags::TRANSFER_DST,
         });
+        let ubg = BindGroupLayoutDescriptor {
+            bindings: &[BindGroupLayoutBinding {
+                binding: 0,
+                visibility: ShaderStageFlags::VERTEX,
+                ty: BindingType::UniformBuffer,
+            }],
+        };
+
+        let tbg = BindGroupLayoutDescriptor {
+            bindings: &[
+                BindGroupLayoutBinding {
+                    binding: 0,
+                    visibility: ShaderStageFlags::FRAGMENT,
+                    ty: BindingType::SampledTexture,
+                },
+                BindGroupLayoutBinding {
+                    binding: 1,
+                    visibility: ShaderStageFlags::FRAGMENT,
+                    ty: BindingType::Sampler,
+                },
+            ],
+        };
+        let tla = device.create_bind_group_layout(&tbg);
+        let ula = device.create_bind_group_layout(&ubg);
 
         Drawer {
             cmd: command_buffer,
             col: Some(col),
-            tla: device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                bindings: &[
-                    BindGroupLayoutBinding {
-                        binding: 0,
-                        visibility: ShaderStageFlags::FRAGMENT,
-                        ty: BindingType::SampledTexture,
-                    },
-                    BindGroupLayoutBinding {
-                        binding: 1,
-                        visibility: ShaderStageFlags::FRAGMENT,
-                        ty: BindingType::Sampler,
-                    },
-                ],
-            }),
             pso: device.create_render_pipeline(&RenderPipelineDescriptor {
                 layout: &device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                    bind_group_layouts: &[
-                        &device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                            bindings: &[BindGroupLayoutBinding {
-                                binding: 0,
-                                visibility: ShaderStageFlags::VERTEX,
-                                ty: BindingType::UniformBuffer,
-                            }],
-                        }),
-                        &device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                            bindings: &[
-                                BindGroupLayoutBinding {
-                                    binding: 0,
-                                    visibility: ShaderStageFlags::FRAGMENT,
-                                    ty: BindingType::SampledTexture,
-                                },
-                                BindGroupLayoutBinding {
-                                    binding: 1,
-                                    visibility: ShaderStageFlags::FRAGMENT,
-                                    ty: BindingType::Sampler,
-                                },
-                            ],
-                        }),
-                    ],
+                    bind_group_layouts: &[&ula, &tla],
                 }),
                 vertex_stage: PipelineStageDescriptor { module: &vs, entry_point: "main" },
                 fragment_stage: PipelineStageDescriptor { module: &fs, entry_point: "main" },
@@ -233,7 +193,7 @@ impl Drawer {
                             offset: 8,
                         },
                         wgpu::VertexAttributeDescriptor {
-                            format: VertexFormat::Uint,
+                            format: VertexFormat::Float4,
                             attribute_index: 2,
                             offset: 16,
                         },
@@ -245,13 +205,7 @@ impl Drawer {
             vsz: vbo_size,
             esz: ebo_size,
             ubg: device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                    bindings: &[BindGroupLayoutBinding {
-                        binding: 0,
-                        visibility: ShaderStageFlags::VERTEX,
-                        ty: BindingType::UniformBuffer,
-                    }],
-                }),
+                layout: &ula,
                 bindings: &[Binding {
                     binding: 0,
                     resource: BindingResource::Buffer {
@@ -267,6 +221,7 @@ impl Drawer {
                 (DrawVertexLayoutAttribute::NK_VERTEX_COLOR, DrawVertexLayoutFormat::NK_FORMAT_R8G8B8A8, size_of::<f32>() as u32 * 4),
                 (DrawVertexLayoutAttribute::NK_VERTEX_ATTRIBUTE_COUNT, DrawVertexLayoutFormat::NK_FORMAT_COUNT, 0u32),
             ]),
+            tla: tla,
         }
     }
 
@@ -318,7 +273,7 @@ impl Drawer {
         rpass.set_vertex_buffers(&[(&vbf, 0)]);
         rpass.set_index_buffer(&ebf, 0);
 
-        rpass.set_bind_group(0, &self.ubg);
+        rpass.set_bind_group(0, &self.ubg, &[]);
 
         let mut start = 0;
         let mut end;
@@ -335,7 +290,7 @@ impl Drawer {
 
             end = start + cmd.elem_count();
 
-            rpass.set_bind_group(1, &res.bind_group);
+            rpass.set_bind_group(1, &res.bind_group, &[]);
 
             rpass.set_scissor_rect((cmd.clip_rect().x * scale.x) as u32, (cmd.clip_rect().y * scale.y) as u32, (cmd.clip_rect().w * scale.x) as u32, (cmd.clip_rect().h * scale.y) as u32);
 
