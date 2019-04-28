@@ -17,7 +17,7 @@ path = "src/lib.rs"
 [dependencies]
 log = "~0.3"
 wgpu = {version = "~0.2", path = "../wgpu/wgpu-rs"}
-nuklear-rust = "~0.5"
+nuklear-rust = "~0.6"
 glsl-to-spirv = "~0.1"
 
 [features]

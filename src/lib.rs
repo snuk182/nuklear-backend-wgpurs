@@ -1,6 +1,6 @@
 #![cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))] // TODO later
 
-use nuklear::{Buffer as NkBuffer, Context, ConvertConfig, DrawVertexLayoutAttribute, DrawVertexLayoutElements, DrawVertexLayoutFormat, Handle, Vec2};
+use nuklear::{Buffer as NkBuffer, Context, ConvertConfig, DrawVertexLayoutAttribute, DrawVertexLayoutElements, DrawVertexLayoutFormat, Handle, Size, Vec2};
 use std::{
     mem::{size_of, size_of_val},
     slice::from_raw_parts,
@@ -149,9 +149,7 @@ impl Drawer {
             cmd: command_buffer,
             col: Some(col),
             pso: device.create_render_pipeline(&RenderPipelineDescriptor {
-                layout: &device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                    bind_group_layouts: &[&ula, &tla],
-                }),
+                layout: &device.create_pipeline_layout(&PipelineLayoutDescriptor { bind_group_layouts: &[&ula, &tla] }),
                 vertex_stage: PipelineStageDescriptor { module: &vs, entry_point: "main" },
                 fragment_stage: PipelineStageDescriptor { module: &fs, entry_point: "main" },
                 rasterization_state: RasterizationStateDescriptor {
@@ -193,7 +191,7 @@ impl Drawer {
                             offset: 8,
                         },
                         wgpu::VertexAttributeDescriptor {
-                            format: VertexFormat::Float4,
+                            format: VertexFormat::Uint,
                             attribute_index: 2,
                             offset: 16,
                         },
@@ -216,10 +214,10 @@ impl Drawer {
             }),
             ubf: ubf,
             vle: DrawVertexLayoutElements::new(&[
-                (DrawVertexLayoutAttribute::NK_VERTEX_POSITION, DrawVertexLayoutFormat::NK_FORMAT_FLOAT, 0),
-                (DrawVertexLayoutAttribute::NK_VERTEX_TEXCOORD, DrawVertexLayoutFormat::NK_FORMAT_FLOAT, size_of::<f32>() as u32 * 2),
-                (DrawVertexLayoutAttribute::NK_VERTEX_COLOR, DrawVertexLayoutFormat::NK_FORMAT_R8G8B8A8, size_of::<f32>() as u32 * 4),
-                (DrawVertexLayoutAttribute::NK_VERTEX_ATTRIBUTE_COUNT, DrawVertexLayoutFormat::NK_FORMAT_COUNT, 0u32),
+                (DrawVertexLayoutAttribute::Position, DrawVertexLayoutFormat::Float, 0),
+                (DrawVertexLayoutAttribute::TexCoord, DrawVertexLayoutFormat::Float, size_of::<f32>() as Size * 2),
+                (DrawVertexLayoutAttribute::Color, DrawVertexLayoutFormat::B8G8R8A8, size_of::<f32>() as Size * 4),
+                (DrawVertexLayoutAttribute::AttributeCount, DrawVertexLayoutFormat::Count, 0),
             ]),
             tla: tla,
         }
@@ -249,6 +247,14 @@ impl Drawer {
             let mut ebuf = NkBuffer::with_fixed(&mut ebf.data);
 
             ctx.convert(&mut self.cmd, &mut vbuf, &mut ebuf, cfg);
+            
+            let vbf = unsafe { std::slice::from_raw_parts_mut(vbf.data as *mut _ as *mut Vertex, vbf.data.len()/std::mem::size_of::<Vertex>()) };
+            
+            for v in vbf.iter_mut() {
+                v.pos[1] = height as f32 - v.pos[1];
+                //v.col.swap(0, 3);
+                
+            }
         }
         let vbf = vbf.finish();
         let ebf = ebf.finish();
@@ -264,7 +270,7 @@ impl Drawer {
                     _ => wgpu::LoadOp::Load,
                 },
                 store_op: StoreOp::Store,
-                clear_color: self.col.unwrap_or(Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }),
+                clear_color: self.col.unwrap_or(Color { r: 1.0, g: 2.0, b: 3.0, a: 1.0 }),
             }],
             depth_stencil_attachment: None,
         });
