@@ -283,8 +283,6 @@ impl Drawer {
                 continue;
             }
 
-            end = start + cmd.elem_count();
-
             let id = cmd.texture().id().unwrap();
             let res = self.find_res(id).unwrap();
 
