@@ -252,8 +252,6 @@ impl Drawer {
             
             for v in vbf.iter_mut() {
                 v.pos[1] = height as f32 - v.pos[1];
-                //v.col.swap(0, 3);
-                
             }
         }
         let vbf = vbf.finish();
@@ -279,7 +277,7 @@ impl Drawer {
         rpass.set_vertex_buffers(&[(&vbf, 0)]);
         rpass.set_index_buffer(&ebf, 0);
 
-        rpass.set_bind_group(0, &self.ubg, &[]);
+        rpass.set_bind_group(0, &self.ubg);
 
         let mut start = 0;
         let mut end;
@@ -294,7 +292,7 @@ impl Drawer {
 
             end = start + cmd.elem_count();
 
-            rpass.set_bind_group(1, &res.bind_group, &[]);
+            rpass.set_bind_group(1, &res.bind_group);
 
             rpass.set_scissor_rect((cmd.clip_rect().x * scale.x) as u32, (cmd.clip_rect().y * scale.y) as u32, (cmd.clip_rect().w * scale.x) as u32, (cmd.clip_rect().h * scale.y) as u32);
 
