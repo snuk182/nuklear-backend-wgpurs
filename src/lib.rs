@@ -247,9 +247,9 @@ impl Drawer {
             let mut ebuf = NkBuffer::with_fixed(&mut ebf.data);
 
             ctx.convert(&mut self.cmd, &mut vbuf, &mut ebuf, cfg);
-            
-            let vbf = unsafe { std::slice::from_raw_parts_mut(vbf.data as *mut _ as *mut Vertex, vbf.data.len()/std::mem::size_of::<Vertex>()) };
-            
+
+            let vbf = unsafe { std::slice::from_raw_parts_mut(vbf.data as *mut _ as *mut Vertex, vbf.data.len() / std::mem::size_of::<Vertex>()) };
+
             for v in vbf.iter_mut() {
                 v.pos[1] = height as f32 - v.pos[1];
             }
