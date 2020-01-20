@@ -2,7 +2,7 @@
 
 use nuklear::{Buffer as NkBuffer, Context, ConvertConfig, DrawVertexLayoutAttribute, DrawVertexLayoutElements, DrawVertexLayoutFormat, Handle, Size, Vec2};
 use std::{
-    mem::{size_of, size_of_val},
+    mem::{size_of, size_of_val, forget},
     slice::from_raw_parts,
     str::from_utf8,
 };
@@ -27,30 +27,30 @@ struct WgpuTexture {
 type Ortho = [[f32; 4]; 4];
 
 impl WgpuTexture {
-    pub fn new(device: &mut Device, drawer: &Drawer, image: &[u8], width: u32, height: u32) -> Self {
+    pub fn new(device: &mut Device, queue: &mut Queue, drawer: &Drawer, image: &[u8], width: u32, height: u32) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             size: Extent3d { width: width, height: height, depth: 1 },
-            array_size: 1,
+            array_layer_count: 1,
             dimension: TextureDimension::D2,
             format: TEXTURE_FORMAT,
-            usage: TextureUsageFlags::SAMPLED | TextureUsageFlags::TRANSFER_DST,
+            mip_level_count: 1,
+            sample_count: 1,
+            usage: TextureUsage::SAMPLED | TextureUsage::COPY_DST,
         });
         let sampler = device.create_sampler(&SamplerDescriptor {
-            r_address_mode: AddressMode::ClampToEdge,
-            s_address_mode: AddressMode::ClampToEdge,
-            t_address_mode: AddressMode::ClampToEdge,
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            address_mode_w: AddressMode::ClampToEdge,
             mag_filter: FilterMode::Linear,
             min_filter: FilterMode::Linear,
             mipmap_filter: FilterMode::Linear,
             lod_min_clamp: -100.0,
             lod_max_clamp: 100.0,
-            max_anisotropy: 0,
             compare_function: CompareFunction::Always,
-            border_color: BorderColor::TransparentBlack,
         });
 
         let bytes = image.len();
-        let buffer = device.create_buffer_mapped(bytes, BufferUsageFlags::TRANSFER_SRC);
+        let buffer = device.create_buffer_mapped(bytes, BufferUsage::COPY_SRC);
         let buffer = buffer.fill_from_slice(image);
 
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { todo: 0 });
@@ -65,14 +65,14 @@ impl WgpuTexture {
             },
             TextureCopyView {
                 texture: &texture,
-                level: 0,
-                slice: 0,
+                mip_level: 0,
+                array_layer: 0,
                 origin: Origin3d { x: 0.0, y: 0.0, z: 0.0 },
             },
             Extent3d { width, height, depth: 1 },
         );
 
-        device.get_queue().submit(&[encoder.finish()]);
+        queue.submit(&[encoder.finish()]);
 
         WgpuTexture {
             bind_group: device.create_bind_group(&BindGroupDescriptor {
@@ -110,21 +110,21 @@ pub struct Drawer {
 
 impl Drawer {
     pub fn new(device: &mut Device, col: Color, texture_count: usize, vbo_size: usize, ebo_size: usize, command_buffer: NkBuffer) -> Drawer {
-        let vs: &[u8] = include_bytes!("../shaders/vs.fx");
-        let fs: &[u8] = include_bytes!("../shaders/ps.fx");
+        let vs = include_bytes!("../shaders/vs.fx");
+        let fs = include_bytes!("../shaders/ps.fx");
 
         let vs = device.create_shader_module(compile_glsl(from_utf8(vs).unwrap(), glsl_to_spirv::ShaderType::Vertex).as_slice());
         let fs = device.create_shader_module(compile_glsl(from_utf8(fs).unwrap(), glsl_to_spirv::ShaderType::Fragment).as_slice());
 
         let ubf = device.create_buffer(&BufferDescriptor {
-            size: size_of::<Ortho>() as u32,
-            usage: BufferUsageFlags::UNIFORM | BufferUsageFlags::TRANSFER_DST,
+            size: size_of::<Ortho>() as u64,
+            usage: BufferUsage::UNIFORM | BufferUsage::COPY_DST,
         });
         let ubg = BindGroupLayoutDescriptor {
             bindings: &[BindGroupLayoutBinding {
                 binding: 0,
-                visibility: ShaderStageFlags::VERTEX,
-                ty: BindingType::UniformBuffer,
+                visibility: ShaderStage::VERTEX,
+                ty: wgpu::BindingType::UniformBuffer { dynamic: false },
             }],
         };
 
@@ -132,12 +132,15 @@ impl Drawer {
             bindings: &[
                 BindGroupLayoutBinding {
                     binding: 0,
-                    visibility: ShaderStageFlags::FRAGMENT,
-                    ty: BindingType::SampledTexture,
+                    visibility: ShaderStage::FRAGMENT,
+                    ty: wgpu::BindingType::SampledTexture {
+                        multisampled: false,
+                        dimension: wgpu::TextureViewDimension::D2,
+                    },
                 },
                 BindGroupLayoutBinding {
                     binding: 1,
-                    visibility: ShaderStageFlags::FRAGMENT,
+                    visibility: ShaderStage::FRAGMENT,
                     ty: BindingType::Sampler,
                 },
             ],
@@ -150,54 +153,56 @@ impl Drawer {
             col: Some(col),
             pso: device.create_render_pipeline(&RenderPipelineDescriptor {
                 layout: &device.create_pipeline_layout(&PipelineLayoutDescriptor { bind_group_layouts: &[&ula, &tla] }),
-                vertex_stage: PipelineStageDescriptor { module: &vs, entry_point: "main" },
-                fragment_stage: PipelineStageDescriptor { module: &fs, entry_point: "main" },
-                rasterization_state: RasterizationStateDescriptor {
+                vertex_stage: ProgrammableStageDescriptor { module: &vs, entry_point: "main" },
+                fragment_stage: Some(ProgrammableStageDescriptor { module: &fs, entry_point: "main" }),
+                rasterization_state: Some(RasterizationStateDescriptor {
                     front_face: FrontFace::Cw,
                     cull_mode: CullMode::None,
                     depth_bias: 0,
                     depth_bias_slope_scale: 0.0,
                     depth_bias_clamp: 0.0,
-                },
+                }),
                 primitive_topology: PrimitiveTopology::TriangleList,
                 color_states: &[ColorStateDescriptor {
                     format: TEXTURE_FORMAT,
-                    color: BlendDescriptor {
+                    color_blend: BlendDescriptor {
                         src_factor: BlendFactor::SrcAlpha,
                         dst_factor: BlendFactor::OneMinusSrcAlpha,
                         operation: BlendOperation::Add,
                     },
-                    alpha: BlendDescriptor {
+                    alpha_blend: BlendDescriptor {
                         src_factor: BlendFactor::OneMinusDstAlpha,
                         dst_factor: BlendFactor::One,
                         operation: BlendOperation::Add,
                     },
-                    write_mask: ColorWriteFlags::ALL,
+                    write_mask: ColorWrite::ALL,
                 }],
                 depth_stencil_state: None,
                 index_format: IndexFormat::Uint16,
                 vertex_buffers: &[VertexBufferDescriptor {
-                    stride: (size_of::<Vertex>()) as u32,
+                    stride: (size_of::<Vertex>()) as u64,
                     step_mode: InputStepMode::Vertex,
                     attributes: &[
                         wgpu::VertexAttributeDescriptor {
                             format: VertexFormat::Float2,
-                            attribute_index: 0,
+                            shader_location: 0,
                             offset: 0,
                         },
                         wgpu::VertexAttributeDescriptor {
                             format: VertexFormat::Float2,
-                            attribute_index: 1,
+                            shader_location: 1,
                             offset: 8,
                         },
                         wgpu::VertexAttributeDescriptor {
                             format: VertexFormat::Uint,
-                            attribute_index: 2,
+                            shader_location: 2,
                             offset: 16,
                         },
                     ],
                 }],
                 sample_count: 1,
+                sample_mask: !0,
+                alpha_to_coverage_enabled: false,
             }),
             tex: Vec::with_capacity(texture_count + 1),
             vsz: vbo_size,
@@ -208,7 +213,7 @@ impl Drawer {
                     binding: 0,
                     resource: BindingResource::Buffer {
                         buffer: &ubf,
-                        range: 0..(size_of::<Ortho>() as u32),
+                        range: 0..(size_of::<Ortho>() as u64),
                     },
                 }],
             }),
@@ -223,8 +228,8 @@ impl Drawer {
         }
     }
 
-    pub fn add_texture(&mut self, device: &mut Device, image: &[u8], width: u32, height: u32) -> Handle {
-        self.tex.push(WgpuTexture::new(device, self, image, width, height));
+    pub fn add_texture(&mut self, device: &mut Device, queue: &mut Queue, image: &[u8], width: u32, height: u32) -> Handle {
+        self.tex.push(WgpuTexture::new(device, queue, self, image, width, height));
         Handle::from_id(self.tex.len() as i32)
     }
 
@@ -239,9 +244,9 @@ impl Drawer {
         cfg.set_vertex_layout(&self.vle);
         cfg.set_vertex_size(size_of::<Vertex>());
 
-        let mut vbf = device.create_buffer_mapped(self.vsz, BufferUsageFlags::VERTEX | BufferUsageFlags::TRANSFER_DST);
-        let mut ebf = device.create_buffer_mapped(self.esz, BufferUsageFlags::INDEX | BufferUsageFlags::TRANSFER_DST);
-        let ubf = device.create_buffer_mapped(ubf_size, BufferUsageFlags::UNIFORM | BufferUsageFlags::TRANSFER_DST);
+        let mut vbf = device.create_buffer_mapped(self.vsz, BufferUsage::VERTEX | BufferUsage::COPY_SRC);
+        let mut ebf = device.create_buffer_mapped(self.esz, BufferUsage::INDEX | BufferUsage::COPY_SRC);
+        let ubf = device.create_buffer_mapped(ubf_size, BufferUsage::UNIFORM | BufferUsage::COPY_SRC);
         {
             let mut vbuf = NkBuffer::with_fixed(&mut vbf.data);
             let mut ebuf = NkBuffer::with_fixed(&mut ebf.data);
@@ -258,7 +263,7 @@ impl Drawer {
         let ebf = ebf.finish();
         let ubf = ubf.fill_from_slice(as_typed_slice(&ortho));
 
-        encoder.copy_buffer_to_buffer(&ubf, 0, &self.ubf, 0, ubf_size as u32);
+        encoder.copy_buffer_to_buffer(&ubf, 0, &self.ubf, 0, ubf_size as u64);
 
         let mut rpass = encoder.begin_render_pass(&RenderPassDescriptor {
             color_attachments: &[RenderPassColorAttachmentDescriptor {
@@ -267,6 +272,7 @@ impl Drawer {
                     Some(_) => wgpu::LoadOp::Clear,
                     _ => wgpu::LoadOp::Load,
                 },
+                resolve_target: None,
                 store_op: StoreOp::Store,
                 clear_color: self.col.unwrap_or(Color { r: 1.0, g: 2.0, b: 3.0, a: 1.0 }),
             }],
@@ -274,10 +280,10 @@ impl Drawer {
         });
         rpass.set_pipeline(&self.pso);
 
-        rpass.set_vertex_buffers(&[(&vbf, 0)]);
+        rpass.set_vertex_buffers(0, &[(&vbf, 0)]);
         rpass.set_index_buffer(&ebf, 0);
 
-        rpass.set_bind_group(0, &self.ubg);
+        rpass.set_bind_group(0, &self.ubg, &[]);
 
         let mut start = 0;
         let mut end;
@@ -292,7 +298,7 @@ impl Drawer {
 
             end = start + cmd.elem_count();
 
-            rpass.set_bind_group(1, &res.bind_group);
+            rpass.set_bind_group(1, &res.bind_group, &[]);
 
             rpass.set_scissor_rect((cmd.clip_rect().x * scale.x) as u32, (cmd.clip_rect().y * scale.y) as u32, (cmd.clip_rect().w * scale.x) as u32, (cmd.clip_rect().h * scale.y) as u32);
 
@@ -314,11 +320,13 @@ impl Drawer {
 fn as_typed_slice<T>(data: &[T]) -> &[u8] {
     unsafe { from_raw_parts(data.as_ptr() as *const u8, data.len() * size_of::<T>()) }
 }
-fn compile_glsl(code: &str, ty: glsl_to_spirv::ShaderType) -> Vec<u8> {
+fn compile_glsl(code: &str, ty: glsl_to_spirv::ShaderType) -> Vec<u32> {
     use std::io::Read;
 
     let mut output = glsl_to_spirv::compile(code, ty).unwrap();
     let mut spv = Vec::new();
     output.read_to_end(&mut spv).unwrap();
-    spv
+    let spv32: Vec<u32> = unsafe { Vec::from_raw_parts(spv.as_mut_ptr() as *mut _ as *mut u32, spv.len() / 4, spv.capacity() / 4) };
+    forget(spv);
+    spv32
 }

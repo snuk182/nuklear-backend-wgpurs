@@ -1,6 +1,6 @@
 [package]
 name = "nuklear-backend-wgpurs"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Serhii Plyhun <snuk188@gmail.com>"]
 keywords = ["gui", "interface", "graphics", "gfx", "wgpu-rs"]
 description = "A Wgpu-rs drawing backend for Rust wrapper for Nuklear 2D GUI library"
@@ -16,13 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 log = "~0.3"
-wgpu = "~0.2"
+wgpu = "~0.4"
 nuklear-rust = "~0.6"
 glsl-to-spirv = "~0.1"
 
-[features]
-default = []
-metal = ["wgpu/metal"]
-dx11 = ["wgpu/dx11"]
-dx12 = ["wgpu/dx12"]
-vulkan = ["wgpu/vulkan"]
