@@ -1,11 +1,12 @@
 #![cfg_attr(feature = "cargo-clippy", allow(too_many_arguments))] // TODO later
 
-use nuklear::{Buffer as NkBuffer, Context, ConvertConfig, DrawVertexLayoutAttribute, DrawVertexLayoutElements, DrawVertexLayoutFormat, Handle, Size, Vec2};
 use std::{
-    mem::{size_of, size_of_val, forget},
+    mem::{forget, size_of, size_of_val},
     slice::from_raw_parts,
     str::from_utf8,
 };
+
+use nuklear::{Buffer as NkBuffer, Context, ConvertConfig, DrawVertexLayoutAttribute, DrawVertexLayoutElements, DrawVertexLayoutFormat, Handle, Size, Vec2};
 use wgpu::*;
 
 pub const TEXTURE_FORMAT: TextureFormat = TextureFormat::Bgra8Unorm;
@@ -24,7 +25,7 @@ struct WgpuTexture {
     pub bind_group: BindGroup,
 }
 
-type Ortho = [[f32; 4]; 4];
+type ProjectionMatrix = [[f32; 4]; 4];
 
 impl WgpuTexture {
     pub fn new(device: &mut Device, queue: &mut Queue, drawer: &Drawer, image: &[u8], width: u32, height: u32) -> Self {
@@ -117,7 +118,7 @@ impl Drawer {
         let fs = device.create_shader_module(compile_glsl(from_utf8(fs).unwrap(), glsl_to_spirv::ShaderType::Fragment).as_slice());
 
         let ubf = device.create_buffer(&BufferDescriptor {
-            size: size_of::<Ortho>() as u64,
+            size: size_of::<ProjectionMatrix>() as u64,
             usage: BufferUsage::UNIFORM | BufferUsage::COPY_DST,
         });
         let ubg = BindGroupLayoutDescriptor {
@@ -213,7 +214,7 @@ impl Drawer {
                     binding: 0,
                     resource: BindingResource::Buffer {
                         buffer: &ubf,
-                        range: 0..(size_of::<Ortho>() as u64),
+                        range: 0..(size_of::<ProjectionMatrix>() as u64),
                     },
                 }],
             }),
@@ -234,11 +235,11 @@ impl Drawer {
     }
 
     pub fn draw(&mut self, ctx: &mut Context, cfg: &mut ConvertConfig, encoder: &mut CommandEncoder, view: &TextureView, device: &mut Device, width: u32, height: u32, scale: Vec2) {
-        let ortho: Ortho = [
+        let ortho: ProjectionMatrix = [
             [2.0f32 / width as f32, 0.0f32, 0.0f32, 0.0f32],
-            [0.0f32, -2.0f32 / height as f32, 0.0f32, 0.0f32],
-            [0.0f32, 0.0f32, -1.0f32, 0.0f32],
-            [-1.0f32, 1.0f32, 0.0f32, 1.0f32],
+            [0.0f32, 2.0f32 / height as f32, 0.0f32, 0.0f32],
+            [0.0f32, 0.0f32, 0.0f32, 0.0f32],
+            [-1.0f32, -1.0f32, 0.0f32, 1.0f32],
         ];
         let ubf_size = size_of_val(&ortho);
         cfg.set_vertex_layout(&self.vle);
@@ -252,12 +253,6 @@ impl Drawer {
             let mut ebuf = NkBuffer::with_fixed(&mut ebf.data);
 
             ctx.convert(&mut self.cmd, &mut vbuf, &mut ebuf, cfg);
-
-            let vbf = unsafe { std::slice::from_raw_parts_mut(vbf.data as *mut _ as *mut Vertex, vbf.data.len() / std::mem::size_of::<Vertex>()) };
-
-            for v in vbf.iter_mut() {
-                v.pos[1] = height as f32 - v.pos[1];
-            }
         }
         let vbf = vbf.finish();
         let ebf = ebf.finish();
