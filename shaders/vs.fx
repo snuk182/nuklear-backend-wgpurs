@@ -11,6 +11,6 @@ layout(location = 1) out vec4 Frag_Color;
 
 void main() {
    Frag_UV = TexCoord;
-   Frag_Color = vec4(Color & 0xFF, (Color >> 8) & 0xFF, (Color >> 16) & 0xFF, (Color >> 24) & 0xFF) / 255.0;;
+   Frag_Color = vec4(Color & 0xFF, (Color >> 8) & 0xFF, (Color >> 16) & 0xFF, (Color >> 24) & 0xFF) / 255.0;
    gl_Position = ProjMtx * vec4(Position.xy, 0, 1);
 }
